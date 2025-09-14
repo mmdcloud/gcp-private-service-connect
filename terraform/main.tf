@@ -1,3 +1,7 @@
+#---------------------------------------------------------------
+# VPC Configuration
+#---------------------------------------------------------------
+
 # Consumer VPC
 module "consumer_vpc" {
   source                  = "../modules/network/vpc"
@@ -9,9 +13,9 @@ module "consumer_vpc" {
 module "consumer_subnet" {
   source                   = "../modules/network/subnet"
   name                     = "consumer-vpc-subnet"
-  subnets                  = var.public_subnets
+  subnets                  = ["10.1.0.0/24"]
   vpc_id                   = module.consumer_vpc.vpc_id
-  private_ip_google_access = false
+  private_ip_google_access = true
   location                 = var.location
 }
 
@@ -26,44 +30,83 @@ module "producer_vpc" {
 module "producer_subnet" {
   source                   = "../modules/network/subnet"
   name                     = "producer-vpc-subnet"
-  subnets                  = var.private_subnets
+  subnets                  = ["10.2.0.0/24"]
   vpc_id                   = module.producer_vpc.vpc_id
   private_ip_google_access = true
   location                 = var.location
 }
 
+#---------------------------------------------------------------
 # Artifact Registry
+#---------------------------------------------------------------
 module "artifact_registry" {
   source        = "../modules/artifact-registry"
   location      = var.location
-  description   = "CarHub frontend repository"
-  repository_id = "carshub-frontend"
-  shell_command = "bash ${path.cwd}/../../../../src/frontend/artifact_push.sh http://${module.carshub_backend_service_lb.ip_address} ${module.carshub_cdn.cdn_ip_address} ${data.google_project.project.project_id}"
-  depends_on    = [module.carshub_backend_service, module.carshub_apis]
+  description   = "cloud run code repository"
+  repository_id = "cloud-run-repo"
+  shell_command = "bash ${path.cwd}/../../src/artifact_push.sh"
 }
 
+#---------------------------------------------------------------
 # Load Balancer
-module "lb" {
-  source                   = "../modules/load-balancer"
-  forwarding_port_range    = "80"
-  forwarding_rule_name     = "carshub-frontend-service-global-forwarding-rule"
-  forwarding_scheme        = "EXTERNAL"
-  global_address_type      = "EXTERNAL"
-  url_map_name             = "carshub-frontend-service-compute-url-map"
-  global_address_name      = "carshub-frontend-service-lb-global-address"
-  target_proxy_name        = "carshub-frontend-service-target-proxy"
-  backend_service_name     = "carshub-frontend-compute"
-  backend_service_protocol = "HTTP"
-  backend_service_timeout  = 30
-  backends = [
-    {
-      backend = module.carshub_frontend_service_neg.id
-    }
-  ]
-  depends_on = [module.carshub_frontend_service]
+#---------------------------------------------------------------
+
+## IP address ##
+resource "google_compute_address" "consumer_apache_web_server_ilb" {
+  name         = "consumer-apache-web-server-ilb"
+  region       = var.location
+  subnetwork   = google_compute_subnetwork.consumer_load_balancer.id
+  address_type = "INTERNAL"
 }
 
+resource "google_compute_forwarding_rule" "consumer_apache_web_server_ilb" {
+  name                  = "consumer-apache-web-server-ilb"
+  region                = var.location
+  subnetwork            = google_compute_subnetwork.consumer_load_balancer.id
+  ip_protocol           = "TCP"
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  port_range            = "80"
+  target                = google_compute_region_target_tcp_proxy.consumer_apache_web_server.id
+
+  depends_on = [
+    google_compute_subnetwork.proxy_only
+  ]
+}
+
+resource "google_compute_region_target_tcp_proxy" "consumer_apache_web_server" {
+  backend_service = google_compute_region_backend_service.consumer_apache_web_server.id
+  name            = "consumer-apache-web-server"
+  region          = var.location
+}
+
+# Backend service targeting the PSC NEG #
+resource "google_compute_region_backend_service" "consumer_apache_web_server" {
+  name                  = "consumer-apache-web-server"
+  region                = var.location
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  protocol              = "TCP"
+  # No health checks due PSC
+
+  backend {
+    group          = google_compute_region_network_endpoint_group.apache_web_server.id
+    balancing_mode = ""
+  }
+}
+
+# PSC Neg targeting the producer service
+resource "google_compute_region_network_endpoint_group" "apache_web_server" {
+  name                  = "apache-web-server"
+  region                = var.region
+  network_endpoint_type = "PRIVATE_SERVICE_CONNECT"
+  psc_target_service    = var.service_attachment_id
+  network               = google_compute_network.consumer_load_balancer.id
+  subnetwork            = google_compute_subnetwork.consumer_load_balancer.id
+}
+
+
+#---------------------------------------------------------------
 # Cloud Run Service
+#---------------------------------------------------------------
 module "cloud_run_service" {
   source                           = "../modules/cloud-run"
   deletion_protection              = false
@@ -94,6 +137,10 @@ module "cloud_run_service" {
   depends_on = [module.carshub_frontend_artifact_registry, module.carshub_apis, module.carshub_cloud_run_service_account]
 }
 
+#---------------------------------------------------------------
+# Consumer Instance Configuration
+#---------------------------------------------------------------
+
 resource "google_compute_address" "consumer_instance_address" {
   name = "consumer-instance-address"
 }
@@ -119,4 +166,25 @@ module "consumer_instance" {
       ]
     }
   ]
+}
+
+#---------------------------------------------------------------
+# Private Service Connect Configuration
+#---------------------------------------------------------------
+# IP Address
+resource "google_compute_address" "consumer_apache_web_server_endpoint" {
+  name         = "consumer-apache-web-server-endpoint"
+  region       = var.location
+  subnetwork   = google_compute_subnetwork.consumer_endpoint.id
+  address_type = "INTERNAL"
+}
+
+# PSC endpoint
+resource "google_compute_forwarding_rule" "consumer_endpoint" {
+  name                    = "consumer-endpoint"
+  region                  = var.location
+  network                 = google_compute_network.consumer_endpoint.id
+  ip_address              = google_compute_address.consumer_apache_web_server_endpoint.id
+  target                  = var.service_attachment_id
+  load_balancing_scheme   = "" # Explicit empty string required for PSC
 }
