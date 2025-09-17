@@ -11,7 +11,6 @@ variable "traffic" {
     traffic_type_percent = string
   }))
 }
-variable "vpc_connector_name" {}
 variable "service_account" {}
 variable "volumes" {
   type = list(object({
@@ -23,6 +22,7 @@ variable "containers" {
   type = list(object({
     image = string
     cpu_idle = bool
+    port = number
     startup_cpu_boost = bool
     env = list(object({
       name  = string
