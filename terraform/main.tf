@@ -16,7 +16,7 @@ module "consumer_vpc" {
   subnets = [
     {
       name                     = "consumer-subnet"
-      region                   = var.location
+      region                   = "${var.location}"
       purpose                  = "PRIVATE"
       role                     = "ACTIVE"
       private_ip_google_access = true
@@ -58,11 +58,27 @@ module "producer_vpc" {
   subnets = [
     {
       name                     = "producer-subnet"
-      region                   = var.location
+      region                   = "${var.location}"
       purpose                  = "PRIVATE"
       private_ip_google_access = true
       role                     = "ACTIVE"
       ip_cidr_range            = "10.2.0.0/24"
+    },
+    {
+      name                     = "psc-subnet"
+      region                   = "${var.location}"
+      purpose                  = "PRIVATE_SERVICE_CONNECT"
+      private_ip_google_access = true
+      role                     = "ACTIVE"
+      ip_cidr_range            = "10.20.0.0/24"
+    },
+    {
+      name                     = "proxy-only-subnet"
+      region                   = "${var.location}"
+      purpose                  = "REGIONAL_MANAGED_PROXY"
+      private_ip_google_access = false
+      role                     = "ACTIVE"
+      ip_cidr_range            = "10.129.0.0/23"
     }
   ]
   firewall_data = [
@@ -109,7 +125,7 @@ module "cloud_run_service_account" {
 module "cloud_run_service" {
   source                           = "./modules/cloud-run"
   deletion_protection              = false
-  ingress                          = "INGRESS_TRAFFIC_INTERNAL_ONLY"
+  ingress                          = "INGRESS_TRAFFIC_ALL"
   service_account                  = module.cloud_run_service_account.sa_email
   location                         = var.location
   min_instance_count               = 2
@@ -136,65 +152,124 @@ module "cloud_run_service" {
   depends_on = [module.artifact_registry]
 }
 
+# Allow unauthenticated access
+resource "google_cloud_run_service_iam_member" "unauthenticated_access" {
+  location = var.location
+  project  = var.project_id
+  service  = module.cloud_run_service.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+#---------------------------------------------------------------
+# Load Balancer Configuration
+#---------------------------------------------------------------
+
+# Network endpoint group
+module "service_neg" {
+  source       = "./modules/network_endpoint_groups"
+  neg_name     = "service-neg"
+  neg_type     = "SERVERLESS"
+  location     = var.location
+  service_name = module.cloud_run_service.name
+}
+
+# # Internal Load Balancer with HTTP
+# module "internal_lb" {
+#   source                   = "./modules/load-balancer"
+#   forwarding_port_range    = "80"
+#   forwarding_rule_name     = "service-global-forwarding-rule"
+#   forwarding_scheme        = "INTERNAL_MANAGED"
+#   global_address_type      = "INTERNAL"
+#   url_map_name             = "service-compute-url-map"
+#   global_address_name      = "service-lb-global-address"
+#   target_proxy_name        = "service-target-proxy"
+#   backend_service_name     = "compute"
+#   backend_service_protocol = "HTTP"
+#   backend_service_timeout  = 30
+#   # security_policy          = module.cloud_armor.policy.id
+#   # ssl_certificates         = [google_compute_managed_ssl_certificate.carshub_ssl_cert.id]
+#   backends = [
+#     {
+#       backend = module.service_neg.id
+#     }
+#   ]
+#   depends_on = [module.cloud_run_service]
+# }
+
+resource "google_compute_region_backend_service" "default" {
+  name                  = "cloudrun-backend"
+  protocol              = "HTTP"
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  locality_lb_policy    = "ROUND_ROBIN"
+  region                = var.location
+  backend {
+    group = module.service_neg.id
+  }
+}
+
+resource "google_compute_region_url_map" "default" {
+  name            = "url-map"
+  region          = var.location
+  default_service = google_compute_region_backend_service.default.id
+}
+
+resource "google_compute_region_target_http_proxy" "default" {
+  name    = "internal-http-proxy"
+  region  = var.location
+  url_map = google_compute_region_url_map.default.id
+}
+
+resource "google_compute_forwarding_rule" "default" {
+  name                  = "ilb-forwarding-rule"
+  region                = var.location
+  load_balancing_scheme = "INTERNAL_MANAGED"
+  port_range            = "80"
+  target                = google_compute_region_target_http_proxy.default.id
+  network               = module.producer_vpc.vpc_id
+  subnetwork            = module.producer_vpc.subnets[0].id
+  ip_protocol           = "TCP"
+}
+
 #---------------------------------------------------------------
 # Private Service Connect Configuration
 #---------------------------------------------------------------
 
-## IP address ##
-# resource "google_compute_address" "consumer_lb_address" {
-#   name         = "consumer-lb-address"
-#   region       = var.location
-#   subnetwork   = module.consumer_vpc.vpc_id
-#   address_type = "INTERNAL"
-# }
+# Service Attachment for Private Service Connect
+resource "google_compute_service_attachment" "psc_attachment" {
+  name        = "cloudrun-psc-attachment"
+  region      = var.location
+  description = "Private Service Connect attachment for Cloud Run"
+  project     = var.project_id
 
-# resource "google_compute_forwarding_rule" "consumer_lb_forwarding_rule" {
-#   name                  = "consumer-lb-forwarding-rule"
-#   region                = var.location
-#   subnetwork            = module.consumer_vpc.vpc_id
-#   ip_protocol           = "TCP"
-#   load_balancing_scheme = "INTERNAL_MANAGED"
-#   port_range            = "80"
-#   target                = google_compute_region_target_tcp_proxy.consumer_lb_region_target_tcp_proxy.id
+  enable_proxy_protocol = false
+  connection_preference = "ACCEPT_AUTOMATIC"
+  nat_subnets           = [module.producer_vpc.subnets[1].id]
+  target_service        = google_compute_forwarding_rule.default.id
+}
 
-#   depends_on = [
-#     google_compute_subnetwork.consumer_proxy_only
-#   ]
-# }
+#---------------------------------------------------------------
+# Consumer Instance Configuration
+#---------------------------------------------------------------
 
-# resource "google_compute_region_target_tcp_proxy" "consumer_lb_region_target_tcp_proxy" {
-#   backend_service = google_compute_region_backend_service.consumer_lb_backend_service.id
-#   name            = "consumer-lb-region-target-tcp-proxy"
-#   region          = var.location
-# }
+# Static IP for PSC Consumer
+resource "google_compute_address" "psc_consumer_ip" {
+  project      = var.project_id
+  name         = "psc-consumer-ip"
+  address_type = "INTERNAL"
+  purpose      = "GCE_ENDPOINT"
+  region       = var.location
+  subnetwork   = module.consumer_vpc.subnets[0].id
+}
 
-# # Backend service targeting the PSC NEG #
-# resource "google_compute_region_backend_service" "consumer_lb_backend_service" {
-#   name                  = "consumer-lb-backend-service"
-#   region                = var.location
-#   load_balancing_scheme = "INTERNAL_MANAGED"
-#   protocol              = "TCP"
-#   # No health checks due PSC
-
-#   backend {
-#     group          = google_compute_region_network_endpoint_group.consumer_neg.id
-#     balancing_mode = ""
-#   }
-# }
-
-# # PSC Neg targeting the producer service
-# resource "google_compute_region_network_endpoint_group" "consumer_neg" {
-#   name                  = "consumer-neg"
-#   region                = var.location
-#   network_endpoint_type = "PRIVATE_SERVICE_CONNECT"
-#   psc_target_service    = var.service_attachment_id
-#   network               = module.consumer_vpc.vpc_id
-#   subnetwork            = google_compute_subnetwork.consumer_proxy_only.id
-# }
-
-# #---------------------------------------------------------------
-# # Consumer Instance Configuration
-# #---------------------------------------------------------------
+resource "google_compute_forwarding_rule" "psc_consumer_forwarding_rule" {
+  name                  = "psc-consumer-fwdr"
+  project               = var.project_id
+  region                = var.location
+  load_balancing_scheme = ""
+  target                = "projects/encoded-alpha-457108-e8/regions/us-central1/serviceAttachments/cloudrun-psc-attachment"
+  ip_address            = google_compute_address.psc_consumer_ip.self_link
+  network               = module.consumer_vpc.vpc_id
+}
 
 resource "google_compute_address" "consumer_instance_address" {
   name = "consumer-instance-address"
@@ -222,45 +297,3 @@ module "consumer_instance" {
     }
   ]
 }
-
-# #---------------------------------------------------------------
-# # Private Service Connect Configuration
-# #---------------------------------------------------------------
-
-# # IP Address
-# resource "google_compute_address" "consumer_endpoint_address" {
-#   name         = "consumer-apache-web-server-endpoint"
-#   region       = var.location
-#   subnetwork   = module.consumer_subnet.subnets[0].id
-#   address_type = "INTERNAL"
-# }
-
-# # PSC endpoint
-# resource "google_compute_forwarding_rule" "consumer_endpoint" {
-#   name                  = "consumer-endpoint"
-#   region                = var.location
-#   network               = module.consumer_vpc.vpc_id
-#   ip_address            = google_compute_address.consumer_endpoint_address.id
-#   target                = var.service_attachment_id
-#   load_balancing_scheme = "" # Explicit empty string required for PSC
-# }
-
-# resource "google_compute_service_attachment" "apache_web_server" {
-#   name                  = "apache-web-server"
-#   region                = var.location
-#   connection_preference = "ACCEPT_MANUAL"
-#   reconcile_connections = true
-#   enable_proxy_protocol = false
-#   target_service        = google_compute_forwarding_rule.apache_web_server_ilb.id
-#   nat_subnets           = [
-#     google_compute_subnetwork.web_app_nat.id
-#   ]
-
-#   dynamic "consumer_accept_lists" {
-#     for_each = var.accepted_consumers
-#     content {
-#       connection_limit  = consumer_accept_lists.value.connection_limit
-#       project_id_or_num = consumer_accept_lists.value.project_number
-#     }
-#   }
-# }

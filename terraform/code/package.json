@@ -1,0 +1,13 @@
+{
+  "name": "express-docker-demo",
+  "version": "1.0.0",
+  "description": "A simple Express.js server running in Docker",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+
