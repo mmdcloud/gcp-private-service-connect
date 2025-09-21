@@ -173,29 +173,6 @@ module "service_neg" {
   service_name = module.cloud_run_service.name
 }
 
-# # Internal Load Balancer with HTTP
-# module "internal_lb" {
-#   source                   = "./modules/load-balancer"
-#   forwarding_port_range    = "80"
-#   forwarding_rule_name     = "service-global-forwarding-rule"
-#   forwarding_scheme        = "INTERNAL_MANAGED"
-#   global_address_type      = "INTERNAL"
-#   url_map_name             = "service-compute-url-map"
-#   global_address_name      = "service-lb-global-address"
-#   target_proxy_name        = "service-target-proxy"
-#   backend_service_name     = "compute"
-#   backend_service_protocol = "HTTP"
-#   backend_service_timeout  = 30
-#   # security_policy          = module.cloud_armor.policy.id
-#   # ssl_certificates         = [google_compute_managed_ssl_certificate.carshub_ssl_cert.id]
-#   backends = [
-#     {
-#       backend = module.service_neg.id
-#     }
-#   ]
-#   depends_on = [module.cloud_run_service]
-# }
-
 resource "google_compute_region_backend_service" "default" {
   name                  = "cloudrun-backend"
   protocol              = "HTTP"
@@ -236,7 +213,7 @@ resource "google_compute_forwarding_rule" "default" {
 
 # Service Attachment for Private Service Connect
 resource "google_compute_service_attachment" "psc_attachment" {
-  name        = "cloudrun-psc-attachment"
+  name        = "psc-attachment"
   region      = var.location
   description = "Private Service Connect attachment for Cloud Run"
   project     = var.project_id
@@ -262,11 +239,11 @@ resource "google_compute_address" "psc_consumer_ip" {
 }
 
 resource "google_compute_forwarding_rule" "psc_consumer_forwarding_rule" {
-  name                  = "psc-consumer-fwdr"
+  name                  = "psc-consumer-forwarding-rule"
   project               = var.project_id
   region                = var.location
   load_balancing_scheme = ""
-  target                = "projects/encoded-alpha-457108-e8/regions/us-central1/serviceAttachments/cloudrun-psc-attachment"
+  target                = "projects/${var.project_id}/regions/${var.location}/serviceAttachments/${google_compute_service_attachment.psc_attachment.name}"
   ip_address            = google_compute_address.psc_consumer_ip.self_link
   network               = module.consumer_vpc.vpc_id
 }
