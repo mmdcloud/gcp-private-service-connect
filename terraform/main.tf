@@ -125,7 +125,7 @@ module "cloud_run_service_account" {
 module "cloud_run_service" {
   source                           = "./modules/cloud-run"
   deletion_protection              = false
-  ingress                          = "INGRESS_TRAFFIC_ALL"
+  ingress                          = "INGRESS_TRAFFIC_INTERNAL_ONLY"
   service_account                  = module.cloud_run_service_account.sa_email
   location                         = var.location
   min_instance_count               = 2
