@@ -12,7 +12,6 @@ module "consumer_vpc" {
   delete_default_routes_on_create = false
   auto_create_subnetworks         = false
   routing_mode                    = "REGIONAL"
-  region                          = var.location
   subnets = [
     {
       name                     = "consumer-subnet"
@@ -54,7 +53,6 @@ module "producer_vpc" {
   delete_default_routes_on_create = false
   auto_create_subnetworks         = false
   routing_mode                    = "REGIONAL"
-  region                          = var.location
   subnets = [
     {
       name                     = "producer-subnet"

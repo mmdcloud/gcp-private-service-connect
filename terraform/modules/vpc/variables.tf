@@ -2,7 +2,6 @@ variable "vpc_name" {}
 variable "delete_default_routes_on_create" {}
 variable "auto_create_subnetworks" {}
 variable "routing_mode" {}
-variable "region" {}
 variable "firewall_data" {
   type = list(object({
     name          = string
