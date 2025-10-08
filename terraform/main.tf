@@ -1,11 +1,11 @@
+#---------------------------------------------------------------
 # Getting project information
+#---------------------------------------------------------------
 data "google_project" "project" {}
 
 #---------------------------------------------------------------
 # VPC Configuration
 #---------------------------------------------------------------
-
-# Consumer VPC
 module "consumer_vpc" {
   source                          = "./modules/vpc"
   vpc_name                        = "consumer-vpc"
@@ -46,7 +46,6 @@ module "consumer_vpc" {
   ]
 }
 
-# Producer VPC
 module "producer_vpc" {
   source                          = "./modules/vpc"
   vpc_name                        = "producer-vpc"
@@ -96,7 +95,6 @@ module "producer_vpc" {
 #---------------------------------------------------------------
 # Artifact Registry
 #---------------------------------------------------------------
-
 module "artifact_registry" {
   source        = "./modules/artifact-registry"
   location      = var.location
@@ -108,7 +106,6 @@ module "artifact_registry" {
 #---------------------------------------------------------------
 # Cloud Run Service
 #---------------------------------------------------------------
-
 module "cloud_run_service_account" {
   source        = "./modules/service-account"
   account_id    = "cloud-run-sa"
@@ -161,8 +158,6 @@ resource "google_cloud_run_service_iam_member" "unauthenticated_access" {
 #---------------------------------------------------------------
 # Load Balancer Configuration
 #---------------------------------------------------------------
-
-# Network endpoint group
 module "service_neg" {
   source       = "./modules/network_endpoint_groups"
   neg_name     = "service-neg"
@@ -208,14 +203,11 @@ resource "google_compute_forwarding_rule" "default" {
 #---------------------------------------------------------------
 # Private Service Connect Configuration
 #---------------------------------------------------------------
-
-# Service Attachment for Private Service Connect
 resource "google_compute_service_attachment" "psc_attachment" {
   name        = "psc-attachment"
   region      = var.location
   description = "Private Service Connect attachment for Cloud Run"
   project     = var.project_id
-
   enable_proxy_protocol = false
   connection_preference = "ACCEPT_AUTOMATIC"
   nat_subnets           = [module.producer_vpc.subnets[1].id]
@@ -225,8 +217,6 @@ resource "google_compute_service_attachment" "psc_attachment" {
 #---------------------------------------------------------------
 # Consumer Instance Configuration
 #---------------------------------------------------------------
-
-# Static IP for PSC Consumer
 resource "google_compute_address" "psc_consumer_ip" {
   project      = var.project_id
   name         = "psc-consumer-ip"
@@ -250,7 +240,6 @@ resource "google_compute_address" "consumer_instance_address" {
   name = "consumer-instance-address"
 }
 
-# Consumer Instance
 module "consumer_instance" {
   source                    = "./modules/compute"
   name                      = "consumer-instance"
