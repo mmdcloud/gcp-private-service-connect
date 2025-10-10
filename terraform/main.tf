@@ -1,4 +1,15 @@
 #---------------------------------------------------------------
+# Getting the public IP of the user
+#---------------------------------------------------------------
+data "http" "my_ip" {
+  url = "https://ifconfig.me"
+}
+
+locals {
+  local_ip = data.http.my_ip.response_body
+}
+
+#---------------------------------------------------------------
 # Getting project information
 #---------------------------------------------------------------
 data "google_project" "project" {}
@@ -15,7 +26,7 @@ module "consumer_vpc" {
   subnets = [
     {
       name                     = "consumer-subnet"
-      region                   = "${var.location}"
+      region                   = var.location
       purpose                  = "PRIVATE"
       role                     = "ACTIVE"
       private_ip_google_access = true
@@ -25,6 +36,7 @@ module "consumer_vpc" {
   firewall_data = [
     {
       name          = "consumer-vpc-firewall-ssh"
+      target_tags   = ["consumer-instance"]
       source_ranges = ["0.0.0.0/0"]
       allow_list = [
         {
@@ -35,6 +47,7 @@ module "consumer_vpc" {
     },
     {
       name          = "consumer-vpc-firewall-http"
+      target_tags   = ["consumer-instance"]
       source_ranges = ["0.0.0.0/0"]
       allow_list = [
         {
@@ -78,18 +91,7 @@ module "producer_vpc" {
       ip_cidr_range            = "10.129.0.0/23"
     }
   ]
-  firewall_data = [
-    {
-      name          = "producer-vpc-firewall-http"
-      source_ranges = ["0.0.0.0/0"]
-      allow_list = [
-        {
-          protocol = "tcp"
-          ports    = ["80"]
-        }
-      ]
-    }
-  ]
+  firewall_data = []
 }
 
 #---------------------------------------------------------------
@@ -147,8 +149,7 @@ module "cloud_run_service" {
   depends_on = [module.artifact_registry]
 }
 
-# Allow unauthenticated access
-resource "google_cloud_run_service_iam_member" "unauthenticated_access" {
+resource "google_cloud_run_service_iam_member" "cloud_run_access" {
   location = var.location
   project  = var.project_id
   service  = module.cloud_run_service.name
@@ -204,10 +205,10 @@ resource "google_compute_forwarding_rule" "default" {
 # Private Service Connect Configuration
 #---------------------------------------------------------------
 resource "google_compute_service_attachment" "psc_attachment" {
-  name        = "psc-attachment"
-  region      = var.location
-  description = "Private Service Connect attachment for Cloud Run"
-  project     = var.project_id
+  name                  = "psc-attachment"
+  region                = var.location
+  description           = "Private Service Connect attachment for Cloud Run"
+  project               = var.project_id
   enable_proxy_protocol = false
   connection_preference = "ACCEPT_AUTOMATIC"
   nat_subnets           = [module.producer_vpc.subnets[1].id]
@@ -260,4 +261,5 @@ module "consumer_instance" {
       ]
     }
   ]
+  tags = ["consumer-instance"]
 }

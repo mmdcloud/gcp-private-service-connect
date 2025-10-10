@@ -14,3 +14,7 @@ variable "network_interfaces" {
     }))
   }))
 }
+variable "tags" {
+  type = list(string)
+  default = []    
+}

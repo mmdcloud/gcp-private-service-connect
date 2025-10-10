@@ -6,6 +6,7 @@ variable "firewall_data" {
   type = list(object({
     name          = string
     source_ranges = set(string)
+    target_tags   = set(string)
     allow_list = set(object({
       protocol = string
       ports    = list(string)
