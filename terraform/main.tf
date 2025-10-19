@@ -1,12 +1,12 @@
 #---------------------------------------------------------------
 # Getting the public IP of the user
 #---------------------------------------------------------------
-data "http" "my_ip" {
+data "http" "local_ip" {
   url = "https://ifconfig.me"
 }
 
 locals {
-  local_ip = data.http.my_ip.response_body
+  local_ip = data.http.local_ip.response_body
 }
 
 #---------------------------------------------------------------
