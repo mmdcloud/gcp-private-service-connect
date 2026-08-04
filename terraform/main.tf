@@ -1,15 +1,4 @@
 #---------------------------------------------------------------
-# Getting the public IP of the user
-#---------------------------------------------------------------
-data "http" "local_ip" {
-  url = "https://ifconfig.me"
-}
-
-locals {
-  local_ip = data.http.local_ip.response_body
-}
-
-#---------------------------------------------------------------
 # Getting project information
 #---------------------------------------------------------------
 data "google_project" "project" {}
@@ -37,7 +26,7 @@ module "consumer_vpc" {
     {
       name          = "consumer-vpc-firewall-ssh"
       target_tags   = ["consumer-instance"]
-      source_ranges = ["0.0.0.0/0"]
+      source_ranges = ["35.235.240.0/20"]
       allow_list = [
         {
           protocol = "tcp"
@@ -55,7 +44,7 @@ module "consumer_vpc" {
           ports    = ["80"]
         }
       ]
-    },
+    }
   ]
 }
 
@@ -102,7 +91,19 @@ module "artifact_registry" {
   location      = var.location
   description   = "nodeapp code repository"
   repository_id = "nodeapp"
-  shell_command = "bash ${path.cwd}/../src/artifact_push.sh ${data.google_project.project.project_id}"
+}
+
+resource "null_resource" "build_and_push_image" {
+  triggers = {
+    always_run = timestamp()
+  }
+  provisioner "local-exec" {
+    command = "bash ${path.cwd}/../src/artifact_push.sh ${data.google_project.project.project_id}"
+  }
+
+  depends_on = [
+    module.artifact_registry
+  ]
 }
 
 #---------------------------------------------------------------
@@ -143,10 +144,10 @@ module "cloud_run_service" {
       volume_mounts     = []
       cpu_idle          = true
       startup_cpu_boost = true
-      image             = "${var.location}-docker.pkg.dev/${data.google_project.project.project_id}/nodeapp/nodeapp:latest"
+      image             = "${var.location}-docker.pkg.dev/${data.google_project.project.project_id}/nodeapp/nodeapp:1"
     }
   ]
-  depends_on = [module.artifact_registry]
+  depends_on = [null_resource.build_and_push_image]
 }
 
 resource "google_cloud_run_service_iam_member" "cloud_run_access" {
@@ -237,10 +238,6 @@ resource "google_compute_forwarding_rule" "psc_consumer_forwarding_rule" {
   network               = module.consumer_vpc.vpc_id
 }
 
-resource "google_compute_address" "consumer_instance_address" {
-  name = "consumer-instance-address"
-}
-
 module "consumer_instance" {
   source                    = "./modules/compute"
   name                      = "consumer-instance"
@@ -249,16 +246,12 @@ module "consumer_instance" {
   metadata_startup_script   = "sudo apt-get update; sudo apt-get install nginx -y"
   deletion_protection       = false
   allow_stopping_for_update = true
-  image                     = "ubuntu-os-cloud/ubuntu-2004-focal-v20220712"
+  image                     = "ubuntu-os-cloud/ubuntu-2204-lts"
   network_interfaces = [
     {
       network    = "${module.consumer_vpc.vpc_id}"
       subnetwork = "${module.consumer_vpc.subnets[0].id}"
-      access_configs = [
-        {
-          nat_ip = "${google_compute_address.consumer_instance_address.address}"
-        }
-      ]
+      access_configs = []
     }
   ]
   tags = ["consumer-instance"]
