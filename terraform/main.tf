@@ -144,7 +144,7 @@ module "cloud_run_service" {
       volume_mounts     = []
       cpu_idle          = true
       startup_cpu_boost = true
-      image             = "${var.location}-docker.pkg.dev/${data.google_project.project.project_id}/nodeapp/nodeapp:1"
+      image             = "${var.location}-docker.pkg.dev/${data.google_project.project.project_id}/nodeapp/nodeapp:latest"
     }
   ]
   depends_on = [null_resource.build_and_push_image]
@@ -249,8 +249,8 @@ module "consumer_instance" {
   image                     = "ubuntu-os-cloud/ubuntu-2204-lts"
   network_interfaces = [
     {
-      network    = "${module.consumer_vpc.vpc_id}"
-      subnetwork = "${module.consumer_vpc.subnets[0].id}"
+      network        = "${module.consumer_vpc.vpc_id}"
+      subnetwork     = "${module.consumer_vpc.subnets[0].id}"
       access_configs = []
     }
   ]
