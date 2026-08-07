@@ -37,7 +37,7 @@ module "consumer_vpc" {
     {
       name          = "consumer-vpc-firewall-http"
       target_tags   = ["consumer-instance"]
-      source_ranges = ["0.0.0.0/0"]
+      source_ranges = ["10.1.0.0/24"]
       allow_list = [
         {
           protocol = "tcp"
