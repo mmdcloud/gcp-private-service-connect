@@ -56,12 +56,12 @@ module "producer_vpc" {
   routing_mode                    = "REGIONAL"
   subnets = [
     {
-      name                     = "producer-subnet"
+      name                     = "lb-subnet"
       region                   = "${var.location}"
       purpose                  = "PRIVATE"
       private_ip_google_access = true
       role                     = "ACTIVE"
-      ip_cidr_range            = "10.2.0.0/24"
+      ip_cidr_range            = "10.1.0.0/24"
     },
     {
       name                     = "psc-subnet"
@@ -168,38 +168,33 @@ module "service_neg" {
   service_name = module.cloud_run_service.name
 }
 
-resource "google_compute_region_backend_service" "default" {
-  name                  = "cloudrun-backend"
-  protocol              = "HTTP"
-  load_balancing_scheme = "INTERNAL_MANAGED"
-  locality_lb_policy    = "ROUND_ROBIN"
-  region                = var.location
-  backend {
-    group = module.service_neg.id
+module "lb" {
+  source             = "./modules/load-balancer"
+  project_id         = var.project_id
+  name               = "internal-lb"
+  load_balancer_type = "INTERNAL"
+  region             = var.location
+  network            = module.producer_vpc.self_link
+  subnetwork         = module.producer_vpc.subnets[0].id
+
+  backends = {
+    lb = {
+      is_default          = true
+      protocol            = "HTTP"
+      port_name           = "http"
+      is_serverless_neg   = true
+      manage_health_check = false
+      groups = [
+        { group = module.service_neg.id }
+      ]
+    }
   }
-}
 
-resource "google_compute_region_url_map" "default" {
-  name            = "url-map"
-  region          = var.location
-  default_service = google_compute_region_backend_service.default.id
-}
-
-resource "google_compute_region_target_http_proxy" "default" {
-  name    = "internal-http-proxy"
-  region  = var.location
-  url_map = google_compute_region_url_map.default.id
-}
-
-resource "google_compute_forwarding_rule" "default" {
-  name                  = "ilb-forwarding-rule"
-  region                = var.location
-  load_balancing_scheme = "INTERNAL_MANAGED"
-  port_range            = "80"
-  target                = google_compute_region_target_http_proxy.default.id
-  network               = module.producer_vpc.vpc_id
-  subnetwork            = module.producer_vpc.subnets[0].id
-  ip_protocol           = "TCP"
+  enable_ssl              = false
+  enable_http             = true
+  managed_ssl_certificate = false
+  enable_cloud_armor      = false
+  depends_on              = [module.cloud_run_service]
 }
 
 #---------------------------------------------------------------
@@ -213,7 +208,7 @@ resource "google_compute_service_attachment" "psc_attachment" {
   enable_proxy_protocol = false
   connection_preference = "ACCEPT_AUTOMATIC"
   nat_subnets           = [module.producer_vpc.subnets[1].id]
-  target_service        = google_compute_forwarding_rule.default.id
+  target_service        = module.lb.http_forwarding_rule_id
 }
 
 #---------------------------------------------------------------
